@@ -19,8 +19,11 @@ internal sealed class VoiceSpeaker : IVoiceSpeaker
     public IVoiceParameter CreateVoiceParameter() => new VoiceParameter();
     public IVoiceParameter MigrateParameter(IVoiceParameter currentParameter) =>
         currentParameter is VoiceParameter ? currentParameter : CreateVoiceParameter();
-    public Task<string> ConvertKanjiToYomiAsync(string text, IVoiceParameter voiceParameter) =>
-        throw new NotImplementedException("ひらがな・カタカナで入力してください。");
+    public Task<string> ConvertKanjiToYomiAsync(string text, IVoiceParameter voiceParameter)
+    {
+        var value = voiceParameter as VoiceParameter ?? (VoiceParameter)CreateVoiceParameter();
+        return Task.FromResult(JapaneseReadingConverter.ToHiragana(text, value.DictionaryPath));
+    }
 
     public async Task<IVoicePronounce?> CreateVoiceAsync(
         string text, IVoicePronounce? pronounce, IVoiceParameter? parameter, string filePath)
@@ -29,11 +32,12 @@ internal sealed class VoiceSpeaker : IVoiceSpeaker
         if (string.IsNullOrWhiteSpace(value.VoicebankPath))
             throw new InvalidOperationException("声質パラメーターの「UTAU音源フォルダー」を設定してください。");
 
+        var reading = JapaneseReadingConverter.ToHiragana(text, value.DictionaryPath);
         await Semaphore.WaitAsync();
         try
         {
             await Task.Run(() => MonophoneSynthesizer.Synthesize(
-                value.VoicebankPath, text, filePath, value.Speed / 100.0, value.Crossfade));
+                value.VoicebankPath, reading, filePath, value.Speed / 100.0, value.Crossfade, value.MoraDuration));
         }
         finally
         {

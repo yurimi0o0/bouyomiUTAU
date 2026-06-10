@@ -25,6 +25,14 @@ class Ymm4PluginSourceTests(unittest.TestCase):
         self.assertIn("net10.0-windows10.0.19041.0", project)
         self.assertIn("YukkuriMovieMaker.Plugin", project)
 
+    def test_uses_ime_for_kanji_and_mora_timing(self):
+        converter = (PLUGIN / "JapaneseReadingConverter.cs").read_text(encoding="utf-8")
+        synth = (PLUGIN / "MonophoneSynthesizer.cs").read_text(encoding="utf-8")
+        self.assertIn('MSIME.Japan', converter)
+        self.assertIn('GetPhonetic', converter)
+        self.assertIn('RenderMora', synth)
+        self.assertIn('entry.Consonant', synth)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -8,23 +8,28 @@ internal static class MonophoneSynthesizer
     static readonly HashSet<char> SmallKana = [.. "ゃゅょぁぃぅぇぉャュョァィゥェォ"];
     static readonly HashSet<char> Punctuation = [.. "、。,.!?！？…・ \t\r\n"];
 
-    sealed record OtoEntry(string WavPath, double Offset, double Cutoff);
+    sealed record OtoEntry(string WavPath, double Offset, double Consonant, double Cutoff, double Preutter, double Overlap);
 
-    public static void Synthesize(string voicebankPath, string text, string outputPath, double speed, int crossfadeMs)
+    public static void Synthesize(string voicebankPath, string text, string outputPath, double speed, int crossfadeMs, int moraDurationMs)
     {
         var entries = LoadOto(voicebankPath);
         if (entries.Count == 0) throw new InvalidOperationException("oto.iniが見つかりません。単独音音源フォルダーを確認してください。");
         var output = new List<short>();
         var fade = crossfadeMs * OutputRate / 1000;
-        var silence = new short[(int)(OutputRate * 0.16 / Math.Max(speed, 0.25))];
-
         foreach (var token in Tokenize(text))
         {
-            if (token == "_") { output.AddRange(silence); continue; }
+            if (token is "~" or "_" or "__")
+            {
+                var pauseMs = token == "~" ? 70 : token == "_" ? 150 : 280;
+                output.AddRange(new short[(int)(OutputRate * pauseMs / 1000 / Math.Max(speed, 0.25))]);
+                continue;
+            }
             if (!entries.TryGetValue(Normalize(token), out var entry) || !File.Exists(entry.WavPath)) continue;
-            var clip = ReadWav(entry);
-            clip = Resample(clip.Samples, clip.Rate, OutputRate, speed);
-            var overlap = Math.Min(fade, Math.Min(output.Count, clip.Length));
+            var source = ReadWav(entry);
+            var targetMs = moraDurationMs / Math.Max(speed, 0.25);
+            var clip = RenderMora(source.Samples, source.Rate, entry, targetMs);
+            var configuredOverlap = entry.Overlap > 0 ? (int)Math.Round(entry.Overlap * OutputRate / 1000) : fade;
+            var overlap = Math.Min(configuredOverlap, Math.Min(output.Count, clip.Length));
             for (var i = 0; i < overlap; i++)
             {
                 var ratio = (double)i / overlap;
@@ -55,7 +60,9 @@ internal static class MonophoneSynthesizer
                 var values = line[(equals + 1)..].Split(',');
                 var alias = values.ElementAtOrDefault(0)?.Trim();
                 if (string.IsNullOrEmpty(alias)) alias = Path.GetFileNameWithoutExtension(wavName);
-                var entry = new OtoEntry(Path.Combine(Path.GetDirectoryName(otoPath)!, wavName), Number(values, 1), Number(values, 3));
+                var entry = new OtoEntry(
+                    Path.Combine(Path.GetDirectoryName(otoPath)!, wavName),
+                    Number(values, 1), Number(values, 2), Number(values, 3), Number(values, 4), Number(values, 5));
                 result[Normalize(alias)] = entry;
                 result.TryAdd(Normalize(Path.GetFileNameWithoutExtension(wavName)), entry);
             }
@@ -71,14 +78,33 @@ internal static class MonophoneSynthesizer
         var result = new List<string>();
         foreach (var character in text)
         {
-            if (Punctuation.Contains(character))
+            if (character is 'っ' or 'ッ') result.Add("~");
+            else if (character == 'ー' && result.Count > 0)
             {
-                if (result.Count == 0 || result[^1] != "_") result.Add("_");
+                var vowel = LastVowel(result[^1]);
+                if (vowel.Length > 0) result.Add(vowel);
+            }
+            else if (Punctuation.Contains(character))
+            {
+                var pause = "。.!?！？".Contains(character) ? "__" : char.IsWhiteSpace(character) ? "~" : "_";
+                if (result.Count == 0 || result[^1] != pause) result.Add(pause);
             }
             else if (SmallKana.Contains(character) && result.Count > 0) result[^1] += Normalize(character.ToString());
             else result.Add(Normalize(character.ToString()));
         }
         return result;
+    }
+
+    static string LastVowel(string token)
+    {
+        const string a = "あかがさざただなはばぱまゃやらわぁ";
+        const string i = "いきぎしじちにひびぴみりゐぃ";
+        const string u = "うくぐすずつぬふぶぷむゅゆるぅ";
+        const string e = "えけげせぜてでねへべぺめれゑぇ";
+        const string o = "おこごそぞとどのほぼぽもょよろをぉ";
+        var last = token.LastOrDefault();
+        if (a.Contains(last)) return "あ"; if (i.Contains(last)) return "い"; if (u.Contains(last)) return "う";
+        if (e.Contains(last)) return "え"; if (o.Contains(last)) return "お"; return "";
     }
 
     static string Normalize(string value)
@@ -109,11 +135,32 @@ internal static class MonophoneSynthesizer
         return (mono[startSample..end], rate);
     }
 
-    static short[] Resample(short[] source, int sourceRate, int targetRate, double speed)
+    static short[] RenderMora(short[] source, int sourceRate, OtoEntry entry, double targetMs)
     {
         if (source.Length == 0) return source;
-        var length = Math.Max(1, (int)Math.Round(source.Length * targetRate / sourceRate / Math.Max(speed, 0.25)));
-        return Enumerable.Range(0, length).Select(i => source[Math.Min(source.Length - 1, (int)Math.Round(i * sourceRate * speed / targetRate))]).ToArray();
+        var targetLength = Math.Max(1, (int)Math.Round(targetMs * OutputRate / 1000));
+        // Preserve the consonant/attack and compress the long sustained vowel separately.
+        var fixedMs = entry.Consonant > 0 ? Math.Min(entry.Consonant, targetMs * 0.7) : Math.Min(65, targetMs * 0.4);
+        var sourceFixed = Math.Min(source.Length, Math.Max(1, (int)Math.Round(fixedMs * sourceRate / 1000)));
+        var targetFixed = Math.Min(targetLength, Math.Max(1, (int)Math.Round(fixedMs * OutputRate / 1000)));
+        var result = new short[targetLength];
+        for (var i = 0; i < targetFixed; i++)
+            result[i] = source[Math.Min(sourceFixed - 1, (int)((long)i * sourceRate / OutputRate))];
+        var vowelStart = Math.Min(source.Length - 1, sourceFixed);
+        var vowelSourceLength = Math.Max(1, source.Length - vowelStart);
+        var vowelTargetLength = targetLength - targetFixed;
+        for (var i = 0; i < vowelTargetLength; i++)
+            result[targetFixed + i] = source[vowelStart + Math.Min(vowelSourceLength - 1, (int)((long)i * vowelSourceLength / Math.Max(1, vowelTargetLength)))];
+        ApplyEnvelope(result, 4, Math.Min(24, targetMs * 0.18));
+        return result;
+    }
+
+    static void ApplyEnvelope(short[] samples, double fadeInMs, double fadeOutMs)
+    {
+        var fadeIn = Math.Min(samples.Length, (int)Math.Round(fadeInMs * OutputRate / 1000));
+        var fadeOut = Math.Min(samples.Length, (int)Math.Round(fadeOutMs * OutputRate / 1000));
+        for (var i = 0; i < fadeIn; i++) samples[i] = Clamp(samples[i] * i / Math.Max(1.0, fadeIn));
+        for (var i = 0; i < fadeOut; i++) samples[^(i + 1)] = Clamp(samples[^(i + 1)] * i / Math.Max(1.0, fadeOut));
     }
 
     static void NormalizeVolume(List<short> samples)

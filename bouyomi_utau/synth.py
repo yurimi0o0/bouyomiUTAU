@@ -8,6 +8,7 @@ import wave
 
 SMALL_KANA = set("ゃゅょぁぃぅぇぉャュョァィゥェォ")
 PUNCTUATION = set("、。,.!?！？…・ \t\r\n")
+VOWELS = {vowel: set(chars) for vowel, chars in {"あ": "あかがさざただなはばぱまゃやらわぁ", "い": "いきぎしじちにひびぴみりゐぃ", "う": "うくぐすずつぬふぶぷむゅゆるぅ", "え": "えけげせぜてでねへべぺめれゑぇ", "お": "おこごそぞとどのほぼぽもょよろをぉ"}.items()}
 
 
 @dataclass(frozen=True)
@@ -30,9 +31,15 @@ def normalize_alias(value: str) -> str:
 def tokenize(text: str) -> list[str]:
     tokens: list[str] = []
     for char in text:
-        if char in PUNCTUATION:
-            if not tokens or tokens[-1] != "_":
-                tokens.append("_")
+        if char in "っッ":
+            tokens.append("~")
+        elif char == "ー" and tokens:
+            last = tokens[-1][-1]
+            tokens.extend(vowel for vowel, chars in VOWELS.items() if last in chars)
+        elif char in PUNCTUATION:
+            pause = "__" if char in "。.!?！？" else "~" if char.isspace() else "_"
+            if not tokens or tokens[-1] != pause:
+                tokens.append(pause)
         elif char in SMALL_KANA and tokens:
             tokens[-1] += normalize_alias(char)
         else:
@@ -98,26 +105,33 @@ def _read_samples(entry: OtoEntry, rate: int) -> array:
     return samples
 
 
-def synthesize(voicebank: Path, text: str, speed: float = 1.0, crossfade_ms: int = 25, rate: int = 44100) -> tuple[bytes, list[str]]:
+def synthesize(voicebank: Path, text: str, speed: float = 1.0, crossfade_ms: int = 25, rate: int = 44100, mora_ms: int = 170) -> tuple[bytes, list[str]]:
     entries = load_oto(voicebank)
     if not entries:
         raise ValueError("oto.ini が見つかりません。UTAU音源フォルダーを指定してください。")
     output = array("h")
     missing: list[str] = []
     fade = round(crossfade_ms * rate / 1000)
-    silence = array("h", [0]) * round(rate * 0.16 / max(speed, 0.25))
     for token in tokenize(text):
-        if token == "_":
-            output.extend(silence)
+        if token in {"~", "_", "__"}:
+            pause_ms = {"~": 70, "_": 150, "__": 280}[token]
+            output.extend(array("h", [0]) * round(rate * pause_ms / 1000 / max(speed, 0.25)))
             continue
         entry = entries.get(normalize_alias(token))
         if not entry or not entry.wav.exists():
             missing.append(token)
             continue
         clip = _read_samples(entry, rate)
-        if speed != 1 and clip:
-            target = max(1, round(len(clip) / max(speed, 0.25)))
-            clip = array("h", (clip[min(len(clip) - 1, round(i * speed))] for i in range(target)))
+        if clip:
+            target = max(1, round(rate * mora_ms / 1000 / max(speed, 0.25)))
+            fixed = min(len(clip), target, round(rate * min(entry.consonant_ms or 65, mora_ms * 0.7) / 1000))
+            onset = array("h", (clip[min(fixed - 1, round(i * fixed / max(fixed, fixed)))] for i in range(fixed))) if fixed else array("h")
+            vowel_source = clip[fixed:] or clip[-1:]
+            vowel_target = max(0, target - len(onset))
+            clip = onset + array("h", (vowel_source[min(len(vowel_source) - 1, round(i * len(vowel_source) / max(1, vowel_target)))] for i in range(vowel_target)))
+            fade_out = min(len(clip), round(rate * 0.024))
+            for i in range(fade_out):
+                clip[-i - 1] = round(clip[-i - 1] * i / max(1, fade_out))
         overlap = min(fade, len(output), len(clip))
         if overlap:
             start = len(output) - overlap
