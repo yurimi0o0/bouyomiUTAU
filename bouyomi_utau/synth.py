@@ -105,17 +105,51 @@ def _read_samples(entry: OtoEntry, rate: int) -> array:
     return samples
 
 
-def synthesize(voicebank: Path, text: str, speed: float = 1.0, crossfade_ms: int = 25, rate: int = 44100, mora_ms: int = 170) -> tuple[bytes, list[str]]:
+def _mora_factor(token: str, previous: str | None, following: str | None, strength: float) -> float:
+    """Vary mora timing like mechanical Japanese speech instead of using a metronomic grid."""
+    factor = 1.0
+    if token and token[-1] in "んン":
+        factor *= 1.12
+    if previous is None or previous in {"~", "_", "__"}:
+        factor *= 1.08
+    if following in {"_", "__", None}:
+        factor *= 1.16
+    elif following == "~":
+        factor *= 0.92
+    if token and token[0] in "かきくけこたちつてとぱぴぷぺぽ":
+        factor *= 0.94
+    return 1.0 + (factor - 1.0) * max(0.0, min(1.0, strength))
+
+
+def _render_mora(clip: array, entry: OtoEntry, rate: int, target: int) -> array:
+    if not clip:
+        return clip
+    fixed = min(len(clip), target, round(rate * min(entry.consonant_ms or 65, target * 1000 / rate * 0.7) / 1000))
+    onset = clip[:fixed]
+    vowel_source = clip[fixed:] or clip[-1:]
+    vowel_target = max(0, target - len(onset))
+    rendered = onset + array("h", (vowel_source[min(len(vowel_source) - 1, i * len(vowel_source) // max(1, vowel_target))] for i in range(vowel_target)))
+    fade_in = min(len(rendered), round(rate * 0.003))
+    for i in range(fade_in):
+        rendered[i] = round(rendered[i] * i / max(1, fade_in))
+    return rendered
+
+
+def synthesize(voicebank: Path, text: str, speed: float = 1.0, crossfade_ms: int = 25, rate: int = 44100, mora_ms: int = 170, naturalness: float = 0.8) -> tuple[bytes, list[str]]:
     entries = load_oto(voicebank)
     if not entries:
         raise ValueError("oto.ini が見つかりません。UTAU音源フォルダーを指定してください。")
     output = array("h")
     missing: list[str] = []
     fade = round(crossfade_ms * rate / 1000)
-    for token in tokenize(text):
+    tokens = tokenize(text)
+    previous: str | None = None
+    for index, token in enumerate(tokens):
+        following = tokens[index + 1] if index + 1 < len(tokens) else None
         if token in {"~", "_", "__"}:
             pause_ms = {"~": 70, "_": 150, "__": 280}[token]
             output.extend(array("h", [0]) * round(rate * pause_ms / 1000 / max(speed, 0.25)))
+            previous = token
             continue
         entry = entries.get(normalize_alias(token))
         if not entry or not entry.wav.exists():
@@ -123,16 +157,11 @@ def synthesize(voicebank: Path, text: str, speed: float = 1.0, crossfade_ms: int
             continue
         clip = _read_samples(entry, rate)
         if clip:
-            target = max(1, round(rate * mora_ms / 1000 / max(speed, 0.25)))
-            fixed = min(len(clip), target, round(rate * min(entry.consonant_ms or 65, mora_ms * 0.7) / 1000))
-            onset = array("h", (clip[min(fixed - 1, round(i * fixed / max(fixed, fixed)))] for i in range(fixed))) if fixed else array("h")
-            vowel_source = clip[fixed:] or clip[-1:]
-            vowel_target = max(0, target - len(onset))
-            clip = onset + array("h", (vowel_source[min(len(vowel_source) - 1, round(i * len(vowel_source) / max(1, vowel_target)))] for i in range(vowel_target)))
-            fade_out = min(len(clip), round(rate * 0.024))
-            for i in range(fade_out):
-                clip[-i - 1] = round(clip[-i - 1] * i / max(1, fade_out))
-        overlap = min(fade, len(output), len(clip))
+            factor = _mora_factor(token, previous, following, naturalness)
+            target = max(1, round(rate * mora_ms * factor / 1000 / max(speed, 0.25)))
+            clip = _render_mora(clip, entry, rate, target)
+        configured_fade = round(rate * (entry.overlap_ms or min(crossfade_ms, max(8, entry.preutter_ms * 0.35))) / 1000)
+        overlap = min(configured_fade or fade, len(output), len(clip))
         if overlap:
             start = len(output) - overlap
             for i in range(overlap):
@@ -141,6 +170,7 @@ def synthesize(voicebank: Path, text: str, speed: float = 1.0, crossfade_ms: int
             output.extend(clip[overlap:])
         else:
             output.extend(clip)
+        previous = token
     if not output:
         output = array("h", [0]) * round(rate * 0.1)
     peak = max(abs(sample) for sample in output) or 1

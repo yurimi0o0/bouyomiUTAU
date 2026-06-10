@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 import subprocess
 
+IME_SCRIPT = Path(__file__).with_name("windows_ime.ps1")
+
 
 def contains_kanji(text: str) -> bool:
     return any("\u3400" <= char <= "\u9fff" or "\uf900" <= char <= "\ufaff" for char in text)
@@ -39,18 +41,11 @@ def convert_japanese_reading(text: str, dictionary_path: str | Path = "") -> tup
     if os.name != "nt":
         return text, "漢字が残っています。Windows版GUIまたはYMM4ではMicrosoft日本語IMEで自動変換されます。"
 
-    script = r'''
-$ErrorActionPreference = "Stop"
-$ime = New-Object -ComObject "MSIME.Japan"
-[void]$ime.Open()
-try { $ime.GetPhonetic($env:BOUYOMI_UTAU_TEXT, 1, -1) }
-finally { [void]$ime.Close() }
-'''
+    script = IME_SCRIPT
     environment = os.environ.copy()
-    environment["BOUYOMI_UTAU_TEXT"] = text
     try:
         result = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(script), "-Text", text],
             env=environment,
             capture_output=True,
             text=True,

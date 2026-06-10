@@ -26,6 +26,7 @@ internal static class JapaneseReadingConverter
         try
         {
             var type = Type.GetTypeFromProgID("MSIME.Japan")
+                ?? Type.GetTypeFromCLSID(new Guid("46b73c9c-0e62-41ee-86c0-2f8997777f48"))
                 ?? throw new InvalidOperationException("Microsoft日本語IMEが見つかりません。Windowsの日本語言語機能を追加してください。");
             language = Activator.CreateInstance(type) as IFELanguage
                 ?? throw new InvalidOperationException("Microsoft日本語IMEを起動できませんでした。");

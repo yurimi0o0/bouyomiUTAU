@@ -12,6 +12,7 @@ internal sealed class VoiceParameter : VoiceParameterBase
     int crossfade = 25;
     int moraDuration = 170;
     string dictionaryPath = "";
+    int naturalness = 80;
 
     [Display(Name = "UTAU音源フォルダー", Description = "oto.iniが入っている単独音音源フォルダーの絶対パス")]
     [DefaultValue("")]
@@ -28,6 +29,12 @@ internal sealed class VoiceParameter : VoiceParameterBase
     [Range(80, 350)]
     [DefaultValue(170)]
     public int MoraDuration { get => moraDuration; set => Set(ref moraDuration, value); }
+
+    [Display(Name = "リズムの自然さ", Description = "文頭・文末・音の種類に応じて一音の長さを変化させます")]
+    [TextBoxSlider("F0", "%", 0, 100, Delay = -1)]
+    [Range(0, 100)]
+    [DefaultValue(80)]
+    public int Naturalness { get => naturalness; set => Set(ref naturalness, value); }
 
     [Display(Name = "音のつなぎ", Description = "隣り合う単独音を重ねる長さです")]
     [TextBoxSlider("F0", " ms", 0, 100, Delay = -1)]

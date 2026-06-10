@@ -32,6 +32,8 @@ class Ymm4PluginSourceTests(unittest.TestCase):
         self.assertIn('GetPhonetic', converter)
         self.assertIn('RenderMora', synth)
         self.assertIn('entry.Consonant', synth)
+        self.assertIn('MoraFactor', synth)
+        self.assertIn('46b73c9c-0e62-41ee-86c0-2f8997777f48', converter)
 
 
 if __name__ == "__main__":

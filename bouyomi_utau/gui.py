@@ -73,6 +73,7 @@ class App:
         self.speed = tk.DoubleVar(value=numeric_setting(settings, "speed", 1.0))
         self.mora = tk.IntVar(value=round(numeric_setting(settings, "mora", 170)))
         self.crossfade = tk.IntVar(value=round(numeric_setting(settings, "crossfade", 25)))
+        self.naturalness = tk.IntVar(value=round(numeric_setting(settings, "naturalness", 80)))
         self.status = tk.StringVar(value="UTAU音源フォルダーを選んでください。")
         self.reading = tk.StringVar(value="")
         self._build()
@@ -88,7 +89,7 @@ class App:
         ttk.Label(container, text="YMM4と同じモーラ長・音のつなぎ・読み辞書で単独音を試聴します。", foreground="#666").pack(anchor="w", pady=(0, 16))
 
         self._path_row(container, "1. UTAU音源フォルダー", self.voicebank, self.choose_voicebank, "音源を確認", self.inspect_voicebank)
-        self._path_row(container, "読み辞書（任意・表記=よみ）", self.dictionary, self.choose_dictionary)
+        self._path_row(container, "読み辞書（任意・表記=よみ）", self.dictionary, self.choose_dictionary, "IME動作確認", self.check_ime)
 
         ttk.Separator(container).pack(fill="x", pady=15)
         ttk.Label(container, text="2. しゃべらせる言葉（漢字対応）", style="Heading.TLabel").pack(anchor="w")
@@ -102,7 +103,8 @@ class App:
         self._slider(settings, 0, "話速", self.speed, 0.6, 1.6, lambda: f"{self.speed.get():.1f}×")
         self._slider(settings, 1, "一音の長さ", self.mora, 80, 350, lambda: f"{self.mora.get()} ms")
         self._slider(settings, 2, "音のつなぎ", self.crossfade, 0, 100, lambda: f"{self.crossfade.get()} ms")
-        ttk.Label(settings, text="目安: 通常会話は一音140～180ms。重なる場合はつなぎを短くします。", foreground="#777").grid(row=3, column=0, columnspan=3, sticky="w", pady=(7, 0))
+        self._slider(settings, 3, "リズム自然さ", self.naturalness, 0, 100, lambda: f"{self.naturalness.get()} %")
+        ttk.Label(settings, text="目安: 通常会話は一音140～180ms・リズム自然さ80%。", foreground="#777").grid(row=4, column=0, columnspan=3, sticky="w", pady=(7, 0))
 
         actions = ttk.Frame(container)
         actions.pack(fill="x", pady=(18, 10))
@@ -136,6 +138,11 @@ class App:
         path = filedialog.askopenfilename(title="読み辞書を選択", filetypes=[("テキスト", "*.txt"), ("すべて", "*.*")])
         if path: self.dictionary.set(path); self._remember()
 
+    def check_ime(self) -> None:
+        reading, warning = convert_japanese_reading("今日は良い天気です", self.dictionary.get())
+        self.reading.set(f"IME動作確認: {reading}" + (f"  ⚠ {warning}" if warning else "  ✓ 漢字変換できます"))
+        self.status.set("IME動作確認が完了しました。")
+
     def inspect_voicebank(self) -> None:
         path = Path(self.voicebank.get()).expanduser()
         entries = load_oto(path) if path.is_dir() else {}
@@ -144,7 +151,7 @@ class App:
 
     def _remember(self) -> None:
         try:
-            save_settings({"voicebank": self.voicebank.get(), "dictionary": self.dictionary.get(), "speed": str(self.speed.get()), "mora": str(self.mora.get()), "crossfade": str(self.crossfade.get())})
+            save_settings({"voicebank": self.voicebank.get(), "dictionary": self.dictionary.get(), "speed": str(self.speed.get()), "mora": str(self.mora.get()), "crossfade": str(self.crossfade.get()), "naturalness": str(self.naturalness.get())})
         except OSError:
             pass
 
@@ -156,12 +163,12 @@ class App:
         reading, warning = convert_japanese_reading(text, self.dictionary.get())
         self.reading.set(f"読み: {reading}" + (f"  ⚠ {warning}" if warning else ""))
         self.talk_button.configure(state="disabled"); self.status.set("読みを変換して、音声を作っています…")
-        options = (self.speed.get(), self.crossfade.get(), self.mora.get())
+        options = (self.speed.get(), self.crossfade.get(), self.mora.get(), self.naturalness.get() / 100)
         threading.Thread(target=self._synthesize, args=(voicebank, reading, *options), daemon=True).start()
 
-    def _synthesize(self, voicebank: Path, reading: str, speed: float, crossfade: int, mora: int) -> None:
+    def _synthesize(self, voicebank: Path, reading: str, speed: float, crossfade: int, mora: int, naturalness: float) -> None:
         try:
-            wav_data, missing = synthesize(voicebank, reading, speed=speed, crossfade_ms=crossfade, mora_ms=mora)
+            wav_data, missing = synthesize(voicebank, reading, speed=speed, crossfade_ms=crossfade, mora_ms=mora, naturalness=naturalness)
             self.temp_wav.write_bytes(wav_data); self.wav_data = wav_data
             self.root.after(0, self._synthesis_done, missing)
         except Exception as exc:

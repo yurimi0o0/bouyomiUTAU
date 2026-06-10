@@ -37,7 +37,7 @@ internal sealed class VoiceSpeaker : IVoiceSpeaker
         try
         {
             await Task.Run(() => MonophoneSynthesizer.Synthesize(
-                value.VoicebankPath, reading, filePath, value.Speed / 100.0, value.Crossfade, value.MoraDuration));
+                value.VoicebankPath, reading, filePath, value.Speed / 100.0, value.Crossfade, value.MoraDuration, value.Naturalness / 100.0));
         }
         finally
         {

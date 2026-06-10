@@ -55,6 +55,12 @@ class GuiHelperTests(unittest.TestCase):
 
 
 class NaturalTimingTests(unittest.TestCase):
+    def test_natural_timing_varies_phrase_final_duration(self):
+        from bouyomi_utau.synth import _mora_factor
+
+        self.assertGreater(_mora_factor("あ", "か", None, 1.0), _mora_factor("あ", "か", "き", 1.0))
+        self.assertEqual(_mora_factor("あ", "か", None, 0.0), 1.0)
+
     def test_long_recording_is_shortened_to_mora_duration(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

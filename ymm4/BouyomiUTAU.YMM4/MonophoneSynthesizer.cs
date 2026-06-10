@@ -10,25 +10,30 @@ internal static class MonophoneSynthesizer
 
     sealed record OtoEntry(string WavPath, double Offset, double Consonant, double Cutoff, double Preutter, double Overlap);
 
-    public static void Synthesize(string voicebankPath, string text, string outputPath, double speed, int crossfadeMs, int moraDurationMs)
+    public static void Synthesize(string voicebankPath, string text, string outputPath, double speed, int crossfadeMs, int moraDurationMs, double naturalness)
     {
         var entries = LoadOto(voicebankPath);
         if (entries.Count == 0) throw new InvalidOperationException("oto.iniが見つかりません。単独音音源フォルダーを確認してください。");
         var output = new List<short>();
-        var fade = crossfadeMs * OutputRate / 1000;
-        foreach (var token in Tokenize(text))
+        var tokens = Tokenize(text).ToList();
+        string? previous = null;
+        for (var tokenIndex = 0; tokenIndex < tokens.Count; tokenIndex++)
         {
+            var token = tokens[tokenIndex];
+            var following = tokenIndex + 1 < tokens.Count ? tokens[tokenIndex + 1] : null;
             if (token is "~" or "_" or "__")
             {
                 var pauseMs = token == "~" ? 70 : token == "_" ? 150 : 280;
                 output.AddRange(new short[(int)(OutputRate * pauseMs / 1000 / Math.Max(speed, 0.25))]);
+                previous = token;
                 continue;
             }
             if (!entries.TryGetValue(Normalize(token), out var entry) || !File.Exists(entry.WavPath)) continue;
             var source = ReadWav(entry);
-            var targetMs = moraDurationMs / Math.Max(speed, 0.25);
+            var targetMs = moraDurationMs * MoraFactor(token, previous, following, naturalness) / Math.Max(speed, 0.25);
             var clip = RenderMora(source.Samples, source.Rate, entry, targetMs);
-            var configuredOverlap = entry.Overlap > 0 ? (int)Math.Round(entry.Overlap * OutputRate / 1000) : fade;
+            var overlapMs = entry.Overlap > 0 ? entry.Overlap : Math.Min(crossfadeMs, Math.Max(8, entry.Preutter * 0.35));
+            var configuredOverlap = (int)Math.Round(overlapMs * OutputRate / 1000);
             var overlap = Math.Min(configuredOverlap, Math.Min(output.Count, clip.Length));
             for (var i = 0; i < overlap; i++)
             {
@@ -36,6 +41,7 @@ internal static class MonophoneSynthesizer
                 output[output.Count - overlap + i] = Clamp(output[output.Count - overlap + i] * (1 - ratio) + clip[i] * ratio);
             }
             output.AddRange(clip.Skip(overlap));
+            previous = token;
         }
         if (output.Count == 0) output.AddRange(new short[OutputRate / 10]);
         NormalizeVolume(output);
@@ -135,6 +141,17 @@ internal static class MonophoneSynthesizer
         return (mono[startSample..end], rate);
     }
 
+    static double MoraFactor(string token, string? previous, string? following, double strength)
+    {
+        var factor = 1.0;
+        if (token.EndsWith('ん')) factor *= 1.12;
+        if (previous is null or "~" or "_" or "__") factor *= 1.08;
+        if (following is null or "_" or "__") factor *= 1.16;
+        else if (following == "~") factor *= 0.92;
+        if ("かきくけこたちつてとぱぴぷぺぽ".Contains(token[0])) factor *= 0.94;
+        return 1 + (factor - 1) * Math.Clamp(strength, 0, 1);
+    }
+
     static short[] RenderMora(short[] source, int sourceRate, OtoEntry entry, double targetMs)
     {
         if (source.Length == 0) return source;
@@ -151,16 +168,14 @@ internal static class MonophoneSynthesizer
         var vowelTargetLength = targetLength - targetFixed;
         for (var i = 0; i < vowelTargetLength; i++)
             result[targetFixed + i] = source[vowelStart + Math.Min(vowelSourceLength - 1, (int)((long)i * vowelSourceLength / Math.Max(1, vowelTargetLength)))];
-        ApplyEnvelope(result, 4, Math.Min(24, targetMs * 0.18));
+        ApplyEnvelope(result, 3);
         return result;
     }
 
-    static void ApplyEnvelope(short[] samples, double fadeInMs, double fadeOutMs)
+    static void ApplyEnvelope(short[] samples, double fadeInMs)
     {
         var fadeIn = Math.Min(samples.Length, (int)Math.Round(fadeInMs * OutputRate / 1000));
-        var fadeOut = Math.Min(samples.Length, (int)Math.Round(fadeOutMs * OutputRate / 1000));
         for (var i = 0; i < fadeIn; i++) samples[i] = Clamp(samples[i] * i / Math.Max(1.0, fadeIn));
-        for (var i = 0; i < fadeOut; i++) samples[^(i + 1)] = Clamp(samples[^(i + 1)] * i / Math.Max(1.0, fadeOut));
     }
 
     static void NormalizeVolume(List<short> samples)
