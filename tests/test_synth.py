@@ -28,5 +28,23 @@ class SynthTests(unittest.TestCase):
             self.assertEqual(result[:4], b"RIFF")
 
 
+class GuiHelperTests(unittest.TestCase):
+    def test_settings_round_trip(self):
+        from bouyomi_utau.gui import load_settings, save_settings
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings.json"
+            save_settings({"voicebank": "voice", "speed": "1.2"}, path)
+            self.assertEqual(load_settings(path), {"voicebank": "voice", "speed": "1.2"})
+
+    def test_invalid_settings_are_ignored(self):
+        from bouyomi_utau.gui import load_settings
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings.json"
+            path.write_text("not json", encoding="utf-8")
+            self.assertEqual(load_settings(path), {})
+
+
 if __name__ == "__main__":
     unittest.main()

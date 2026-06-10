@@ -4,8 +4,6 @@ from array import array
 from dataclasses import dataclass
 from pathlib import Path
 import io
-import math
-import re
 import wave
 
 SMALL_KANA = set("ゃゅょぁぃぅぇぉャュョァィゥェォ")
