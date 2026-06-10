@@ -1,0 +1,144 @@
+from __future__ import annotations
+
+from array import array
+from dataclasses import dataclass
+from pathlib import Path
+import io
+import math
+import re
+import wave
+
+SMALL_KANA = set("ゃゅょぁぃぅぇぉャュョァィゥェォ")
+PUNCTUATION = set("、。,.!?！？…・ \t\r\n")
+
+
+@dataclass(frozen=True)
+class OtoEntry:
+    wav: Path
+    alias: str
+    offset_ms: float = 0
+    consonant_ms: float = 0
+    cutoff_ms: float = 0
+    preutter_ms: float = 0
+    overlap_ms: float = 0
+
+
+def normalize_alias(value: str) -> str:
+    """Normalize an alias so hiragana input can find katakana voicebank entries."""
+    value = value.strip().lstrip("- ").rstrip(" R")
+    return "".join(chr(ord(c) - 0x60) if "ァ" <= c <= "ヶ" else c for c in value)
+
+
+def tokenize(text: str) -> list[str]:
+    tokens: list[str] = []
+    for char in text:
+        if char in PUNCTUATION:
+            if not tokens or tokens[-1] != "_":
+                tokens.append("_")
+        elif char in SMALL_KANA and tokens:
+            tokens[-1] += normalize_alias(char)
+        else:
+            tokens.append(normalize_alias(char))
+    return tokens
+
+
+def load_oto(voicebank: Path) -> dict[str, OtoEntry]:
+    entries: dict[str, OtoEntry] = {}
+    oto_files = list(voicebank.rglob("oto.ini"))
+    for oto_file in oto_files:
+        raw = oto_file.read_bytes()
+        for encoding in ("utf-8-sig", "cp932"):
+            try:
+                text = raw.decode(encoding)
+                break
+            except UnicodeDecodeError:
+                continue
+        else:
+            continue
+        for line in text.splitlines():
+            if "=" not in line:
+                continue
+            wav_name, values = line.split("=", 1)
+            parts = values.split(",")
+            alias = parts[0].strip() or Path(wav_name).stem
+            nums = []
+            for value in parts[1:6]:
+                try:
+                    nums.append(float(value or 0))
+                except ValueError:
+                    nums.append(0.0)
+            nums += [0.0] * (5 - len(nums))
+            entry = OtoEntry(oto_file.parent / wav_name, alias, *nums)
+            entries[normalize_alias(alias)] = entry
+            entries.setdefault(normalize_alias(Path(wav_name).stem), entry)
+    return entries
+
+
+def _read_samples(entry: OtoEntry, rate: int) -> array:
+    with wave.open(str(entry.wav), "rb") as source:
+        channels, width, source_rate, frames = (
+            source.getnchannels(), source.getsampwidth(), source.getframerate(), source.getnframes()
+        )
+        data = source.readframes(frames)
+    if width != 2:
+        raise ValueError(f"16-bit WAV のみ対応しています: {entry.wav.name}")
+    samples = array("h")
+    samples.frombytes(data)
+    if channels > 1:
+        samples = array("h", (sum(samples[i:i + channels]) // channels for i in range(0, len(samples), channels)))
+    start = max(0, round(entry.offset_ms * source_rate / 1000))
+    if entry.cutoff_ms > 0:
+        end = max(start, len(samples) - round(entry.cutoff_ms * source_rate / 1000))
+    elif entry.cutoff_ms < 0:
+        end = min(len(samples), start + round(abs(entry.cutoff_ms) * source_rate / 1000))
+    else:
+        end = len(samples)
+    samples = samples[start:end]
+    if source_rate != rate and samples:
+        new_len = max(1, round(len(samples) * rate / source_rate))
+        samples = array("h", (samples[min(len(samples) - 1, round(i * source_rate / rate))] for i in range(new_len)))
+    return samples
+
+
+def synthesize(voicebank: Path, text: str, speed: float = 1.0, crossfade_ms: int = 25, rate: int = 44100) -> tuple[bytes, list[str]]:
+    entries = load_oto(voicebank)
+    if not entries:
+        raise ValueError("oto.ini が見つかりません。UTAU音源フォルダーを指定してください。")
+    output = array("h")
+    missing: list[str] = []
+    fade = round(crossfade_ms * rate / 1000)
+    silence = array("h", [0]) * round(rate * 0.16 / max(speed, 0.25))
+    for token in tokenize(text):
+        if token == "_":
+            output.extend(silence)
+            continue
+        entry = entries.get(normalize_alias(token))
+        if not entry or not entry.wav.exists():
+            missing.append(token)
+            continue
+        clip = _read_samples(entry, rate)
+        if speed != 1 and clip:
+            target = max(1, round(len(clip) / max(speed, 0.25)))
+            clip = array("h", (clip[min(len(clip) - 1, round(i * speed))] for i in range(target)))
+        overlap = min(fade, len(output), len(clip))
+        if overlap:
+            start = len(output) - overlap
+            for i in range(overlap):
+                ratio = i / overlap
+                output[start + i] = max(-32768, min(32767, round(output[start + i] * (1 - ratio) + clip[i] * ratio)))
+            output.extend(clip[overlap:])
+        else:
+            output.extend(clip)
+    if not output:
+        output = array("h", [0]) * round(rate * 0.1)
+    peak = max(abs(sample) for sample in output) or 1
+    gain = min(1.0, 30000 / peak)
+    if gain < 1:
+        output = array("h", (round(sample * gain) for sample in output))
+    target = io.BytesIO()
+    with wave.open(target, "wb") as result:
+        result.setnchannels(1)
+        result.setsampwidth(2)
+        result.setframerate(rate)
+        result.writeframes(output.tobytes())
+    return target.getvalue(), missing
