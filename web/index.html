@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BouyomiUTAU Studio</title><link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header><div class="brand"><span class="logo">ぼ</span><div><b>BouyomiUTAU</b><small>単独音スピーチスタジオ</small></div></div><span class="local">● ローカルで動作中</span></header>
+<main>
+  <section class="hero"><p class="eyebrow">BOUYOMI × UTAU</p><h1>あの声で、<em>しゃべろう。</em></h1><p>UTAUの単独音をつないで、文章をすぐにプレビュー。<br>音源データはPCの外へ送信されません。</p></section>
+  <section class="studio">
+    <div class="step"><span>01</span><div><label for="voicebank">UTAU音源フォルダー</label><p>oto.ini が入っているフォルダーのパス</p></div><button id="check">音源を確認</button></div>
+    <div class="path"><span>⌕</span><input id="voicebank" placeholder="例: C:\UTAU\voice\音源名" autocomplete="off"></div>
+    <div id="voiceStatus" class="notice">音源フォルダーを指定してください</div>
+    <div class="divider"></div>
+    <div class="step"><span>02</span><div><label for="text">しゃべらせる言葉</label><p>ひらがな・カタカナで入力してください</p></div><div class="count"><b id="count">0</b> / 140</div></div>
+    <textarea id="text" maxlength="140" placeholder="こんにちは、きょうもいいてんきですね。"></textarea>
+    <div class="options"><label>話速 <input id="speed" type="range" min="0.6" max="1.6" value="1" step="0.1"><output id="speedOut">1.0×</output></label><span>句読点で自然な間を追加します</span></div>
+    <button class="talk" id="talk"><span>▶</span> この声でしゃべる</button>
+    <audio id="audio" controls></audio><div id="error" class="error"></div>
+  </section>
+  <aside><h2>棒読みちゃんから呼び出す</h2><p>本アプリの起動中は、次のURLでWAVを取得できます。棒読みちゃんのプラグインや配信ツールからHTTPリクエストしてください。</p><code>http://127.0.0.1:50100/api/talk?<br>voicebank=音源パス&amp;text=こんにちは</code><p class="tip">単独音なので、漢字はひらがなに直すときれいに発音できます。</p></aside>
+</main><footer>Made for local voices · BouyomiUTAU 0.1</footer><script src="app.js"></script>
+</body></html>
