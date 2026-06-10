@@ -40,6 +40,11 @@ class GuiHelperTests(unittest.TestCase):
             save_settings({"voicebank": "voice", "speed": "1.2"}, path)
             self.assertEqual(load_settings(path), {"voicebank": "voice", "speed": "1.2"})
 
+    def test_invalid_numeric_setting_uses_default(self):
+        from bouyomi_utau.gui import numeric_setting
+
+        self.assertEqual(numeric_setting({"mora": "broken"}, "mora", 170), 170)
+
     def test_invalid_settings_are_ignored(self):
         from bouyomi_utau.gui import load_settings
 
